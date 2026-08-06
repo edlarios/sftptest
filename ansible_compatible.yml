@@ -1,5 +1,5 @@
 ---
-- name: Transferir archivos Montvia por SFTP con usuario y contraseña v10
+- name: Transferir archivos Montvia por SFTP con usuario y contraseña v11
   hosts: all
   gather_facts: false
 
@@ -15,11 +15,14 @@
       - montvia4.txt
       - montvia5.txt
 
-    # Conexión SFTP ejecutada desde el controlador Semaphore.
     sftp_host: ""
     sftp_user: ""
     sftp_port: 22
     sftp_password: ""
+
+    # Cambiar temporalmente a true para diagnosticar errores SFTP.
+    # Mantener false en producción para ocultar credenciales y comandos.
+    sftp_debug: false
 
   tasks:
     - name: Validar directorio destino sin Python remoto
@@ -51,6 +54,15 @@
       delegate_to: localhost
       changed_when: false
 
+    - name: Validar variables SFTP sin mostrar la contraseña
+      ansible.builtin.debug:
+        msg:
+          - "SFTP host: {{ sftp_host }}"
+          - "SFTP user: {{ sftp_user }}"
+          - "SFTP port: {{ sftp_port }}"
+          - "Contraseña definida: {{ (sftp_password | default('') | length > 0) }}"
+          - "sshpass debug: {{ sftp_debug }}"
+
     - name: Crear staging y eliminar archivos anteriores sin Python remoto
       ansible.builtin.raw: >-
         mkdir -p {{ directorio_staging | quote }} &&
@@ -74,13 +86,15 @@
           | sshpass -e sftp
           -oBatchMode=no
           -oPubkeyAuthentication=no
+          -oKbdInteractiveAuthentication=yes
+          -oPreferredAuthentications=password,keyboard-interactive
           -oStrictHostKeyChecking=accept-new
           -P {{ sftp_port }}
           {{ sftp_user | quote }}@{{ sftp_host | quote }}
       delegate_to: localhost
       environment:
         SSHPASS: "{{ sftp_password }}"
-      no_log: true
+      no_log: "{{ not sftp_debug }}"
       loop: "{{ archivos_montvia }}"
       loop_control:
         label: "{{ item }}"
