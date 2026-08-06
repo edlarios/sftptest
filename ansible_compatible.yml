@@ -1,10 +1,10 @@
 ---
-- name: Transferir archivos Montvia sin Python remoto
+- name: Transferir archivos Montvia sin Python remoto v8
   hosts: all
   gather_facts: false
 
   vars:
-    directorio_destino: "/home/test"
+    directorio_destino: "/home/veb/Enviado/ListaBlanca"
     directorio_staging: "/tmp/montvia-staging"
     archivos_montvia:
       - montvia1.txt
@@ -12,16 +12,13 @@
       - montvia3.txt
       - montvia4.txt
       - montvia5.txt
-
-    # Estas variables deben coincidir con la conexión SSH de Semaphore.
     sftp_host: "{{ ansible_host | default(inventory_hostname) }}"
     sftp_user: "{{ ansible_user | default('veb') }}"
     sftp_port: "{{ ansible_port | default(22) }}"
-    # Define la ruta de la clave en Semaphore o deja vacío si usa ssh-agent.
     sftp_identity_file: ""
 
   tasks:
-    - name: Validar directorio destino sin usar Python remoto
+    - name: Validar directorio destino sin Python remoto
       ansible.builtin.raw: "test -d {{ directorio_destino | quote }}"
       changed_when: false
 
@@ -50,8 +47,8 @@
         {{ (directorio_destino + '/' + archivo) | quote }}
         {% endfor %}
 
-    - name: Registrar inicio de transferencia SFTP
-      ansible.builtin.shell: "date +%s"
+    - name: Registrar inicio de transferencia SFTP con nanosegundos
+      ansible.builtin.shell: "python3 -c 'import time; print(time.time_ns())'"
       delegate_to: localhost
       changed_when: false
       register: transferencia_inicio
@@ -70,11 +67,22 @@
       loop_control:
         label: "{{ item }}"
 
-    - name: Registrar fin de transferencia SFTP
-      ansible.builtin.shell: "date +%s"
+    - name: Registrar fin de transferencia SFTP con nanosegundos
+      ansible.builtin.shell: "python3 -c 'import time; print(time.time_ns())'"
       delegate_to: localhost
       changed_when: false
       register: transferencia_fin
+
+    - name: Calcular duración segura de la transferencia
+      ansible.builtin.set_fact:
+        transferencia_sftp_ns: "{{ (transferencia_fin.stdout | int) - (transferencia_inicio.stdout | int) }}"
+      delegate_to: localhost
+
+    - name: Convertir duración a segundos y minutos
+      ansible.builtin.set_fact:
+        transferencia_sftp_segundos: "{{ [((transferencia_sftp_ns | float) / 1000000000), 0.001] | max }}"
+        transferencia_sftp_minutos: "{{ (((transferencia_sftp_ns | float) / 1000000000) / 60) | round(3) }}"
+      delegate_to: localhost
 
     - name: Copiar archivos desde staging al destino CIFS sin Python remoto
       ansible.builtin.raw: >-
@@ -90,10 +98,10 @@
         msg:
           - "Archivos transferidos: {{ archivos_montvia | join(', ') }}"
           - "Datos transferidos: {{ archivos_origen_stat.results | map(attribute='stat.size') | map('int') | sum }} bytes"
-          - "Tiempo SFTP: {{ ((transferencia_fin.stdout | int) - (transferencia_inicio.stdout | int)) }} segundos"
-          - "Tiempo SFTP: {{ ((((transferencia_fin.stdout | int) - (transferencia_inicio.stdout | int)) / 60) | round(2)) }} minutos"
+          - "Tiempo SFTP: {{ transferencia_sftp_segundos | float | round(3) }} segundos"
+          - "Tiempo SFTP: {{ transferencia_sftp_minutos | float | round(3) }} minutos"
           - >-
-            Ancho de banda promedio: {{ (((archivos_origen_stat.results | map(attribute='stat.size') | map('int') | sum) * 8) / ((transferencia_fin.stdout | int) - (transferencia_inicio.stdout | int)) / 1000) | round(2) }} kbit/s
+            Ancho de banda promedio: {{ ((((archivos_origen_stat.results | map(attribute='stat.size') | map('int') | sum) * 8) / transferencia_sftp_segundos) / 1000) | round(2) }} kbit/s
           - >-
-            Velocidad promedio: {{ (((archivos_origen_stat.results | map(attribute='stat.size') | map('int') | sum) / 1024) / ((transferencia_fin.stdout | int) - (transferencia_inicio.stdout | int))) | round(2) }} KiB/s
+            Velocidad promedio: {{ (((archivos_origen_stat.results | map(attribute='stat.size') | map('int') | sum) / 1024) / transferencia_sftp_segundos) | round(2) }} KiB/s
 
