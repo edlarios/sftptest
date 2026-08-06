@@ -1,11 +1,11 @@
 ---
-- name: Transferir archivos Montvia por SFTP con usuario y contraseña v11
+- name: Transferir archivos Montvia por SFTP con usuario y contraseña v13
   hosts: all
   gather_facts: false
 
   vars:
     # Sobrescribibles desde Semaphore como Extra Variables.
-    directorio_destino: "/home/test"
+    directorio_destino: "/home/veb/Enviado/ListaBlanca"
     directorio_staging: "/tmp/montvia-staging"
 
     archivos_montvia:
@@ -19,9 +19,6 @@
     sftp_user: ""
     sftp_port: 22
     sftp_password: ""
-
-    # Cambiar temporalmente a true para diagnosticar errores SFTP.
-    # Mantener false en producción para ocultar credenciales y comandos.
     sftp_debug: false
 
   tasks:
@@ -54,15 +51,6 @@
       delegate_to: localhost
       changed_when: false
 
-    - name: Validar variables SFTP sin mostrar la contraseña
-      ansible.builtin.debug:
-        msg:
-          - "SFTP host: {{ sftp_host }}"
-          - "SFTP user: {{ sftp_user }}"
-          - "SFTP port: {{ sftp_port }}"
-          - "Contraseña definida: {{ (sftp_password | default('') | length > 0) }}"
-          - "sshpass debug: {{ sftp_debug }}"
-
     - name: Crear staging y eliminar archivos anteriores sin Python remoto
       ansible.builtin.raw: >-
         mkdir -p {{ directorio_staging | quote }} &&
@@ -70,6 +58,15 @@
         {% for archivo in archivos_montvia %}
         {{ (directorio_destino + '/' + archivo) | quote }}
         {% endfor %}
+
+    - name: Mostrar archivos y tamaños antes de transferir
+      ansible.builtin.debug:
+        msg: >-
+          {{ item.item }}: {{ (item.stat.size | float / 1000000) | round(2) }} MB
+          ({{ (item.stat.size | float / 1048576) | round(2) }} MiB)
+      loop: "{{ archivos_origen_stat.results }}"
+      loop_control:
+        label: "{{ item.item }}"
 
     - name: Registrar inicio de transferencia SFTP
       ansible.builtin.shell: "python3 -c 'import time; print(time.time_ns())'"
@@ -130,6 +127,8 @@
         msg:
           - "Archivos transferidos: {{ archivos_montvia | join(', ') }}"
           - "Datos transferidos: {{ archivos_origen_stat.results | map(attribute='stat.size') | map('int') | sum }} bytes"
+          - "Peso total: {{ ((archivos_origen_stat.results | map(attribute='stat.size') | map('int') | sum) / 1000000) | round(2) }} MB"
+          - "Peso total binario: {{ ((archivos_origen_stat.results | map(attribute='stat.size') | map('int') | sum) / 1048576) | round(2) }} MiB"
           - "Tiempo SFTP: {{ transferencia_sftp_segundos | float | round(3) }} segundos"
           - "Tiempo SFTP: {{ transferencia_sftp_minutos | float | round(3) }} minutos"
           - >-
