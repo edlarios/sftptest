@@ -1,11 +1,10 @@
 ---
 - name: Limpiar y transferir archivos montvia por SFTP
   hosts: all
-  become: true
   gather_facts: false
 
   vars:
-    # Estas variables pueden sobrescribirse desde Semaphore UI como Extra Variables.
+    # Estas variables pueden sobrescribirse desde Semaphore como Extra Variables.
     directorio_destino: "/opt/montvia"
     archivos_montvia:
       - montvia1.txt
@@ -13,10 +12,9 @@
       - montvia3.txt
       - montvia4.txt
       - montvia5.txt
-    owner_destino: root
-    group_destino: root
 
-    # Fuerza a Ansible a utilizar SFTP para transferir módulos y archivos.
+    # El usuario veb es propietario del destino; no se usa become ni se fuerzan permisos.
+    ansible_remote_tmp: "/tmp/.ansible-veb/tmp"
     ansible_ssh_transfer_method: sftp
 
   tasks:
@@ -78,9 +76,6 @@
       ansible.builtin.copy:
         src: "{{ item }}"
         dest: "{{ directorio_destino }}/{{ item | basename }}"
-        owner: "{{ owner_destino }}"
-        group: "{{ group_destino }}"
-        mode: "{{ mode_destino }}"
       loop: "{{ archivos_montvia }}"
       loop_control:
         label: "{{ item }}"
@@ -90,7 +85,7 @@
       ansible.builtin.set_fact:
         transferencia_fin_ns: "{{ lookup('ansible.builtin.pipe', 'date +%s%N') | int }}"
 
-    - name: Calcular duración y ancho de banda promedio
+    - name: Calcular duración de transferencia
       ansible.builtin.set_fact:
         transferencia_segundos: "{{ ((transferencia_fin_ns | int) - (transferencia_inicio_ns | int)) / 1000000000 }}"
 
