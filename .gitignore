@@ -1,0 +1,9 @@
+.env
+*.pem
+*.key
+*.crt
+id_rsa
+id_ed25519
+vault-password-file
+*.retry
+inventory.ini

@@ -1,0 +1,107 @@
+---
+- name: Limpiar y transferir archivos montvia por SFTP
+  hosts: all
+  become: true
+  gather_facts: false
+
+  vars:
+    # Estas variables pueden sobrescribirse desde Semaphore UI como Extra Variables.
+    directorio_destino: "/opt/montvia"
+    archivos_montvia:
+      - montvia1.txt
+      - montvia2.txt
+      - montvia3.txt
+      - montvia4.txt
+      - montvia5.txt
+    owner_destino: root
+    group_destino: root
+    mode_destino: "0644"
+
+    # Fuerza a Ansible a utilizar SFTP para transferir módulos y archivos.
+    ansible_ssh_transfer_method: sftp
+
+  tasks:
+    - name: Validar que exista el directorio remoto
+      ansible.builtin.stat:
+        path: "{{ directorio_destino }}"
+      register: directorio_destino_stat
+
+    - name: Detener si el directorio remoto no existe
+      ansible.builtin.fail:
+        msg: "El directorio remoto no existe o no es un directorio: {{ directorio_destino }}"
+      when:
+        - not directorio_destino_stat.stat.exists or not directorio_destino_stat.stat.isdir
+
+    - name: Obtener tamaño de los archivos en el controlador Ansible
+      ansible.builtin.stat:
+        path: "{{ playbook_dir }}/files/{{ item }}"
+      delegate_to: localhost
+      loop: "{{ archivos_montvia }}"
+      loop_control:
+        label: "{{ item }}"
+      register: archivos_origen_stat
+
+    - name: Validar que existan todos los archivos de origen
+      ansible.builtin.fail:
+        msg: "No existe el archivo de origen: {{ playbook_dir }}/files/{{ item.item }}"
+      when: not item.stat.exists or not item.stat.isreg
+      loop: "{{ archivos_origen_stat.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Calcular tamaño total de la transferencia
+      ansible.builtin.set_fact:
+        transferencia_bytes: "{{ archivos_origen_stat.results | map(attribute='stat.size') | map('int') | sum }}"
+
+    - name: Buscar archivos montvia existentes en el destino
+      ansible.builtin.find:
+        paths:
+          - "{{ directorio_destino }}"
+        patterns:
+          - "montvia*.txt"
+        file_type: file
+        recurse: false
+      register: archivos_destino_existentes
+
+    - name: Eliminar archivos montvia existentes
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: "{{ archivos_destino_existentes.files }}"
+      loop_control:
+        label: "{{ item.path }}"
+
+    - name: Registrar inicio de transferencia
+      ansible.builtin.set_fact:
+        transferencia_inicio_ns: "{{ lookup('ansible.builtin.pipe', 'date +%s%N') | int }}"
+
+    - name: Copiar archivos montvia mediante SFTP
+      ansible.builtin.copy:
+        src: "{{ item }}"
+        dest: "{{ directorio_destino }}/{{ item | basename }}"
+        owner: "{{ owner_destino }}"
+        group: "{{ group_destino }}"
+        mode: "{{ mode_destino }}"
+      loop: "{{ archivos_montvia }}"
+      loop_control:
+        label: "{{ item }}"
+      register: transferencia_resultado
+
+    - name: Registrar fin de transferencia
+      ansible.builtin.set_fact:
+        transferencia_fin_ns: "{{ lookup('ansible.builtin.pipe', 'date +%s%N') | int }}"
+
+    - name: Calcular duración y ancho de banda promedio
+      ansible.builtin.set_fact:
+        transferencia_segundos: "{{ ((transferencia_fin_ns | int) - (transferencia_inicio_ns | int)) / 1000000000 }}"
+
+    - name: Mostrar métricas de transferencia
+      ansible.builtin.debug:
+        msg:
+          - "Archivos transferidos: {{ archivos_montvia | join(', ') }}"
+          - "Bytes transferidos: {{ transferencia_bytes }}"
+          - "Tamaño total: {{ (transferencia_bytes | float / 1048576) | round(2) }} MiB"
+          - "Tiempo total: {{ transferencia_segundos | float | round(3) }} segundos"
+          - "Ancho de banda promedio: {{ ((transferencia_bytes | float * 8) / (transferencia_segundos | float) / 1000000) | round(2) }} Mbit/s"
+          - "Velocidad promedio: {{ ((transferencia_bytes | float / 1048576) / (transferencia_segundos | float)) | round(2) }} MiB/s"
+      when: transferencia_segundos | float > 0
