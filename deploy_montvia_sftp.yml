@@ -1,5 +1,5 @@
 ---
-- name: Limpiar y transferir archivos montvia a CIFS v5
+- name: Limpiar y transferir archivos montvia a CIFS v6
   hosts: all
   gather_facts: false
 
@@ -90,10 +90,17 @@
       ansible.builtin.set_fact:
         transferencia_sftp_fin_epoch: "{{ lookup('ansible.builtin.pipe', 'date +%s') | trim | int }}"
 
-    - name: Calcular tiempo de la tarea SFTP
+    - name: Calcular métricas numéricas de la transferencia
       ansible.builtin.set_fact:
         transferencia_sftp_segundos: "{{ (transferencia_sftp_fin_epoch | int) - (transferencia_sftp_inicio_epoch | int) }}"
         transferencia_sftp_minutos: "{{ (((transferencia_sftp_fin_epoch | int) - (transferencia_sftp_inicio_epoch | int)) / 60) | round(2) }}"
+
+    - name: Calcular velocidades de transferencia
+      ansible.builtin.set_fact:
+        transferencia_mbit_s: "{{ (transferencia_bytes | float * 8) / (transferencia_sftp_segundos | float) / 1000000 }}"
+        transferencia_kbit_s: "{{ (transferencia_bytes | float * 8) / (transferencia_sftp_segundos | float) / 1000 }}"
+        transferencia_mib_s: "{{ (transferencia_bytes | float / 1048576) / (transferencia_sftp_segundos | float) }}"
+        transferencia_kib_s: "{{ (transferencia_bytes | float / 1024) / (transferencia_sftp_segundos | float) }}"
 
     - name: Escribir archivos desde staging hacia el destino CIFS
       ansible.builtin.shell:
@@ -112,14 +119,18 @@
       loop_control:
         label: "{{ item }}"
 
-    - name: Mostrar métricas de transferencia SFTP
+    - name: Mostrar métricas legibles de transferencia SFTP
       ansible.builtin.debug:
         msg:
           - "Archivos transferidos: {{ archivos_montvia | join(', ') }}"
-          - "Bytes transferidos por SFTP: {{ transferencia_bytes }}"
-          - "Tamaño total: {{ (transferencia_bytes | float / 1048576) | round(2) }} MiB"
-          - "Tiempo de la tarea SFTP: {{ transferencia_sftp_minutos }} minutos"
-          - "Ancho de banda promedio SFTP: {{ ((transferencia_bytes | float * 8) / (transferencia_sftp_segundos | float) / 1000000) | round(2) }} Mbit/s"
-          - "Velocidad promedio SFTP: {{ ((transferencia_bytes | float / 1048576) / (transferencia_sftp_segundos | float)) | round(2) }} MiB/s"
+          - "Datos transferidos: {{ transferencia_bytes }} bytes ({{ (transferencia_bytes | float / 1048576) | round(2) }} MiB)"
+          - "Tiempo de la tarea SFTP: {{ transferencia_sftp_minutos }} minutos ({{ transferencia_sftp_segundos }} segundos)"
+          - >-
+            Ancho de banda promedio: {{ (transferencia_kbit_s if transferencia_mbit_s < 1 else transferencia_mbit_s) | float | round(2) }}
+            {{ 'kbit/s' if transferencia_mbit_s < 1 else 'Mbit/s' }}
+            ({{ transferencia_mbit_s | float | round(2) }} Mbit/s)
+          - >-
+            Velocidad promedio: {{ (transferencia_kib_s if transferencia_mib_s < 1 else transferencia_mib_s) | float | round(2) }}
+            {{ 'KiB/s' if transferencia_mib_s < 1 else 'MiB/s' }}
+            ({{ transferencia_mib_s | float | round(2) }} MiB/s)
       when: transferencia_sftp_segundos | int > 0
-
