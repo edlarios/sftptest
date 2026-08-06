@@ -1,21 +1,25 @@
 ---
-- name: Transferir archivos Montvia sin Python remoto v8
+- name: Transferir archivos Montvia por SFTP con usuario y contraseña v9
   hosts: all
   gather_facts: false
 
   vars:
-    directorio_destino: "/home/veb/Enviado/ListaBlanca"
+    # Sobrescribibles desde Semaphore como Extra Variables.
+    directorio_destino: "/home/test"
     directorio_staging: "/tmp/montvia-staging"
+
     archivos_montvia:
       - montvia1.txt
       - montvia2.txt
       - montvia3.txt
       - montvia4.txt
       - montvia5.txt
-    sftp_host: "{{ ansible_host | default(inventory_hostname) }}"
-    sftp_user: "{{ ansible_user | default('veb') }}"
-    sftp_port: "{{ ansible_port | default(22) }}"
-    sftp_identity_file: ""
+
+    # Conexión SFTP ejecutada desde el controlador Semaphore.
+    sftp_host: ""
+    sftp_user: ""
+    sftp_port: 22
+    sftp_password: ""
 
   tasks:
     - name: Validar directorio destino sin Python remoto
@@ -39,6 +43,11 @@
       loop_control:
         label: "{{ item.item }}"
 
+    - name: Validar que sshpass exista en el controlador Semaphore
+      ansible.builtin.command: command -v sshpass
+      delegate_to: localhost
+      changed_when: false
+
     - name: Crear staging y eliminar archivos anteriores sin Python remoto
       ansible.builtin.raw: >-
         mkdir -p {{ directorio_staging | quote }} &&
@@ -47,33 +56,39 @@
         {{ (directorio_destino + '/' + archivo) | quote }}
         {% endfor %}
 
-    - name: Registrar inicio de transferencia SFTP con nanosegundos
+    - name: Registrar inicio de transferencia SFTP
       ansible.builtin.shell: "python3 -c 'import time; print(time.time_ns())'"
       delegate_to: localhost
       changed_when: false
       register: transferencia_inicio
 
-    - name: Transferir archivos al staging mediante SFTP desde Semaphore
+    - name: Transferir archivos al staging mediante SFTP
       ansible.builtin.shell:
         cmd: >-
           printf '%s\n'
-          "put {{ (playbook_dir + '/files/' + item) | quote }} {{ (directorio_staging + '/' + item) | quote }}"
-          | sftp -oBatchMode=yes -oStrictHostKeyChecking=accept-new
+          "put {{ (playbook_dir + '/files/' + item) | quote }}
+          {{ (directorio_staging + '/' + item) | quote }}"
+          | sshpass -e sftp
+          -oBatchMode=no
+          -oPubkeyAuthentication=no
+          -oStrictHostKeyChecking=accept-new
           -P {{ sftp_port }}
-          {% if sftp_identity_file | length > 0 %}-i {{ sftp_identity_file | quote }}{% endif %}
           {{ sftp_user | quote }}@{{ sftp_host | quote }}
       delegate_to: localhost
+      environment:
+        SSHPASS: "{{ sftp_password }}"
+      no_log: true
       loop: "{{ archivos_montvia }}"
       loop_control:
         label: "{{ item }}"
 
-    - name: Registrar fin de transferencia SFTP con nanosegundos
+    - name: Registrar fin de transferencia SFTP
       ansible.builtin.shell: "python3 -c 'import time; print(time.time_ns())'"
       delegate_to: localhost
       changed_when: false
       register: transferencia_fin
 
-    - name: Calcular duración segura de la transferencia
+    - name: Calcular duración de la transferencia
       ansible.builtin.set_fact:
         transferencia_sftp_ns: "{{ (transferencia_fin.stdout | int) - (transferencia_inicio.stdout | int) }}"
       delegate_to: localhost
