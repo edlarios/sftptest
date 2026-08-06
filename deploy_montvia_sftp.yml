@@ -1,19 +1,16 @@
 ---
-- name: Limpiar y transferir archivos montvia a CIFS v3
+- name: Limpiar y transferir archivos montvia a CIFS v4
   hosts: all
   gather_facts: false
 
   vars:
-    directorio_destino: "/home/test/"
+    directorio_destino: "/home/test"
     archivos_montvia:
       - montvia1.txt
       - montvia2.txt
       - montvia3.txt
       - montvia4.txt
       - montvia5.txt
-
-    # El primer paso usa SFTP hacia /tmp del host remoto.
-    # El segundo paso escribe localmente sobre el montaje CIFS con cat.
     ansible_remote_tmp: "/tmp/.ansible-veb/tmp"
     ansible_ssh_transfer_method: sftp
     directorio_staging: "/tmp/montvia-staging"
@@ -77,11 +74,11 @@
       loop_control:
         label: "{{ item.path }}"
 
-    - name: Registrar inicio de transferencia
+    - name: Registrar inicio exacto de la tarea SFTP
       ansible.builtin.set_fact:
-        transferencia_inicio_ns: "{{ lookup('ansible.builtin.pipe', 'date +%s%N') | int }}"
+        transferencia_sftp_inicio_epoch: "{{ lookup('ansible.builtin.pipe', 'date +%s') | trim | int }}"
 
-    - name: Transferir archivo al staging mediante SFTP
+    - name: Transferir archivo al servidor mediante SFTP
       ansible.builtin.copy:
         src: "{{ item }}"
         dest: "{{ directorio_staging }}/{{ item | basename }}"
@@ -89,7 +86,15 @@
       loop_control:
         label: "{{ item }}"
 
-    - name: Escribir archivo desde staging hacia el destino CIFS
+    - name: Registrar fin exacto de la tarea SFTP
+      ansible.builtin.set_fact:
+        transferencia_sftp_fin_epoch: "{{ lookup('ansible.builtin.pipe', 'date +%s') | trim | int }}"
+
+    - name: Calcular tiempo de la tarea SFTP
+      ansible.builtin.set_fact:
+        transferencia_sftp_segundos: "{{ (transferencia_sftp_fin_epoch | int) - (transferencia_sftp_inicio_epoch | int) }}"
+
+    - name: Escribir archivos desde staging hacia el destino CIFS
       ansible.builtin.shell:
         cmd: >-
           cat {{ (directorio_staging + '/' + (item | basename)) | quote }}
@@ -106,21 +111,14 @@
       loop_control:
         label: "{{ item }}"
 
-    - name: Registrar fin de transferencia
-      ansible.builtin.set_fact:
-        transferencia_fin_ns: "{{ lookup('ansible.builtin.pipe', 'date +%s%N') | int }}"
-
-    - name: Calcular duración de transferencia
-      ansible.builtin.set_fact:
-        transferencia_segundos: "{{ ((transferencia_fin_ns | int) - (transferencia_inicio_ns | int)) / 1000000000 }}"
-
-    - name: Mostrar métricas de transferencia
+    - name: Mostrar métricas de transferencia SFTP
       ansible.builtin.debug:
         msg:
           - "Archivos transferidos: {{ archivos_montvia | join(', ') }}"
-          - "Bytes transferidos: {{ transferencia_bytes }}"
+          - "Bytes transferidos por SFTP: {{ transferencia_bytes }}"
           - "Tamaño total: {{ (transferencia_bytes | float / 1048576) | round(2) }} MiB"
-          - "Tiempo total: {{ transferencia_segundos | float | round(3) }} segundos"
-          - "Ancho de banda promedio: {{ ((transferencia_bytes | float * 8) / (transferencia_segundos | float) / 1000000) | round(2) }} Mbit/s"
-          - "Velocidad promedio: {{ ((transferencia_bytes | float / 1048576) / (transferencia_segundos | float)) | round(2) }} MiB/s"
-      when: transferencia_segundos | float > 0
+          - "Tiempo de la tarea SFTP: {{ transferencia_sftp_segundos }} segundos"
+          - "Ancho de banda promedio SFTP: {{ ((transferencia_bytes | float * 8) / (transferencia_sftp_segundos | float) / 1000000) | round(2) }} Mbit/s"
+          - "Velocidad promedio SFTP: {{ ((transferencia_bytes | float / 1048576) / (transferencia_sftp_segundos | float)) | round(2) }} MiB/s"
+      when: transferencia_sftp_segundos | int > 0
+
