@@ -1,0 +1,115 @@
+---
+- name: Transferir archivos a freeFTPd mediante SFTP v14
+  hosts: all
+  gather_facts: false
+
+  vars:
+    archivos_montvia:
+      - montvia1.txt
+      - montvia2.txt
+      - montvia3.txt
+      - montvia4.txt
+      - montvia5.txt
+
+    # Ruta virtual dentro del Home Directory configurado en freeFTPd.
+    # No es una ruta Linux del servidor Windows.
+    sftp_remote_dir: ""
+    sftp_host: ""
+    sftp_user: ""
+    sftp_port: 22
+    sftp_password: ""
+    sftp_kex_algorithms: "+diffie-hellman-group14-sha1,diffie-hellman-group1-sha1"
+    sftp_debug: false
+
+  tasks:
+    - name: Validar archivos fuente en el controlador Semaphore
+      ansible.builtin.stat:
+        path: "{{ playbook_dir }}/files/{{ item }}"
+      delegate_to: localhost
+      loop: "{{ archivos_montvia }}"
+      loop_control:
+        label: "{{ item }}"
+      register: archivos_origen_stat
+
+    - name: Detener si falta algún archivo fuente
+      ansible.builtin.fail:
+        msg: "No existe el archivo fuente: {{ playbook_dir }}/files/{{ item.item }}"
+      when: not item.stat.exists or not item.stat.isreg
+      loop: "{{ archivos_origen_stat.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Validar que sshpass exista en el controlador Semaphore
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/sshpass
+          - -V
+      delegate_to: localhost
+      changed_when: false
+
+    - name: Mostrar archivos que serán transferidos
+      ansible.builtin.debug:
+        msg: "Archivo programado para transferencia: {{ item.item }} ({{ (item.stat.size | float / 1000000) | round(2) }} MB)"
+      loop: "{{ archivos_origen_stat.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Registrar inicio de transferencia SFTP
+      ansible.builtin.shell: "python3 -c 'import time; print(time.time_ns())'"
+      delegate_to: localhost
+      changed_when: false
+      register: transferencia_inicio
+
+    - name: Transferir archivos directamente a freeFTPd mediante SFTP
+      ansible.builtin.shell:
+        cmd: >-
+          printf '%s\n'
+          "put {{ (playbook_dir + '/files/' + item) | quote }}
+          {{ (sftp_remote_dir + '/' + item) | quote }}"
+          | sshpass -e sftp
+          -oBatchMode=no
+          -oPubkeyAuthentication=no
+          -oKbdInteractiveAuthentication=yes
+          -oPreferredAuthentications=password,keyboard-interactive
+          -oKexAlgorithms={{ sftp_kex_algorithms }}
+          -oStrictHostKeyChecking=accept-new
+          -P {{ sftp_port }}
+          {{ sftp_user | quote }}@{{ sftp_host | quote }}
+      delegate_to: localhost
+      environment:
+        SSHPASS: "{{ sftp_password }}"
+      no_log: "{{ not sftp_debug }}"
+      loop: "{{ archivos_montvia }}"
+      loop_control:
+        label: "{{ item }}"
+
+    - name: Registrar fin de transferencia SFTP
+      ansible.builtin.shell: "python3 -c 'import time; print(time.time_ns())'"
+      delegate_to: localhost
+      changed_when: false
+      register: transferencia_fin
+
+    - name: Calcular duración de la transferencia
+      ansible.builtin.set_fact:
+        transferencia_sftp_ns: "{{ (transferencia_fin.stdout | int) - (transferencia_inicio.stdout | int) }}"
+      delegate_to: localhost
+
+    - name: Convertir duración a segundos y minutos
+      ansible.builtin.set_fact:
+        transferencia_sftp_segundos: "{{ [((transferencia_sftp_ns | float) / 1000000000), 0.001] | max }}"
+        transferencia_sftp_minutos: "{{ (((transferencia_sftp_ns | float) / 1000000000) / 60) | round(3) }}"
+      delegate_to: localhost
+
+    - name: Mostrar métricas de transferencia
+      ansible.builtin.debug:
+        msg:
+          - "Archivos transferidos: {{ archivos_montvia | join(', ') }}"
+          - "Datos transferidos: {{ archivos_origen_stat.results | map(attribute='stat.size') | map('int') | sum }} bytes"
+          - "Peso total: {{ ((archivos_origen_stat.results | map(attribute='stat.size') | map('int') | sum) / 1000000) | round(2) }} MB"
+          - "Tiempo SFTP: {{ transferencia_sftp_segundos | float | round(3) }} segundos"
+          - "Tiempo SFTP: {{ transferencia_sftp_minutos | float | round(3) }} minutos"
+          - >-
+            Ancho de banda promedio: {{ ((((archivos_origen_stat.results | map(attribute='stat.size') | map('int') | sum) * 8) / transferencia_sftp_segundos) / 1000) | round(2) }} kbit/s
+          - >-
+            Velocidad promedio: {{ (((archivos_origen_stat.results | map(attribute='stat.size') | map('int') | sum) / 1024) / transferencia_sftp_segundos) | round(2) }} KiB/s
+
