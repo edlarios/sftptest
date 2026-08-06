@@ -15,7 +15,6 @@
       - montvia5.txt
     owner_destino: root
     group_destino: root
-    mode_destino: "0644"
 
     # Fuerza a Ansible a utilizar SFTP para transferir módulos y archivos.
     ansible_ssh_transfer_method: sftp
