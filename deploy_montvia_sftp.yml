@@ -4,7 +4,7 @@
   gather_facts: false
 
   vars:
-    directorio_destino: "/home/test"
+    directorio_destino: "/home/test/test"
     archivos_montvia:
       - montvia1.txt
       - montvia2.txt
