@@ -1,11 +1,11 @@
 ---
-- name: Limpiar y transferir archivos montvia por SFTP
+- name: Limpiar y transferir archivos montvia por SFTP v2
   hosts: all
   gather_facts: false
 
   vars:
-    # Estas variables pueden sobrescribirse desde Semaphore como Extra Variables.
-    directorio_destino: "/opt/montvia"
+    # Variables sobrescribibles desde Semaphore como Extra Variables.
+    directorio_destino: "/home/test"
     archivos_montvia:
       - montvia1.txt
       - montvia2.txt
@@ -13,7 +13,8 @@
       - montvia4.txt
       - montvia5.txt
 
-    # El usuario veb es propietario del destino; no se usa become ni se fuerzan permisos.
+    # El usuario remoto es propietario del destino.
+    # No se usa become, owner, group, mode, chmod ni chown.
     ansible_remote_tmp: "/tmp/.ansible-veb/tmp"
     ansible_ssh_transfer_method: sftp
 
@@ -76,6 +77,7 @@
       ansible.builtin.copy:
         src: "{{ item }}"
         dest: "{{ directorio_destino }}/{{ item | basename }}"
+        unsafe_writes: true
       loop: "{{ archivos_montvia }}"
       loop_control:
         label: "{{ item }}"
