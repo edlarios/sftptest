@@ -1,11 +1,10 @@
 ---
-- name: Limpiar y transferir archivos montvia por SFTP v2
+- name: Limpiar y transferir archivos montvia a CIFS v3
   hosts: all
   gather_facts: false
 
   vars:
-    # Variables sobrescribibles desde Semaphore como Extra Variables.
-    directorio_destino: "/home/test"
+    directorio_destino: "/home/test/"
     archivos_montvia:
       - montvia1.txt
       - montvia2.txt
@@ -13,10 +12,11 @@
       - montvia4.txt
       - montvia5.txt
 
-    # El usuario remoto es propietario del destino.
-    # No se usa become, owner, group, mode, chmod ni chown.
+    # El primer paso usa SFTP hacia /tmp del host remoto.
+    # El segundo paso escribe localmente sobre el montaje CIFS con cat.
     ansible_remote_tmp: "/tmp/.ansible-veb/tmp"
     ansible_ssh_transfer_method: sftp
+    directorio_staging: "/tmp/montvia-staging"
 
   tasks:
     - name: Validar que exista el directorio remoto
@@ -51,7 +51,12 @@
       ansible.builtin.set_fact:
         transferencia_bytes: "{{ archivos_origen_stat.results | map(attribute='stat.size') | map('int') | sum }}"
 
-    - name: Buscar archivos montvia existentes en el destino
+    - name: Crear directorio temporal de staging
+      ansible.builtin.file:
+        path: "{{ directorio_staging }}"
+        state: directory
+
+    - name: Buscar archivos montvia existentes en el destino CIFS
       ansible.builtin.find:
         paths:
           - "{{ directorio_destino }}"
@@ -61,10 +66,13 @@
         recurse: false
       register: archivos_destino_existentes
 
-    - name: Eliminar archivos montvia existentes
-      ansible.builtin.file:
-        path: "{{ item.path }}"
-        state: absent
+    - name: Eliminar archivos montvia existentes del destino CIFS
+      ansible.builtin.command:
+        argv:
+          - rm
+          - -f
+          - --
+          - "{{ item.path }}"
       loop: "{{ archivos_destino_existentes.files }}"
       loop_control:
         label: "{{ item.path }}"
@@ -73,15 +81,30 @@
       ansible.builtin.set_fact:
         transferencia_inicio_ns: "{{ lookup('ansible.builtin.pipe', 'date +%s%N') | int }}"
 
-    - name: Copiar archivos montvia mediante SFTP
+    - name: Transferir archivo al staging mediante SFTP
       ansible.builtin.copy:
         src: "{{ item }}"
-        dest: "{{ directorio_destino }}/{{ item | basename }}"
-        unsafe_writes: true
+        dest: "{{ directorio_staging }}/{{ item | basename }}"
       loop: "{{ archivos_montvia }}"
       loop_control:
         label: "{{ item }}"
-      register: transferencia_resultado
+
+    - name: Escribir archivo desde staging hacia el destino CIFS
+      ansible.builtin.shell:
+        cmd: >-
+          cat {{ (directorio_staging + '/' + (item | basename)) | quote }}
+          > {{ (directorio_destino + '/' + (item | basename)) | quote }}
+      loop: "{{ archivos_montvia }}"
+      loop_control:
+        label: "{{ item }}"
+
+    - name: Eliminar archivos temporales de staging
+      ansible.builtin.file:
+        path: "{{ directorio_staging }}/{{ item | basename }}"
+        state: absent
+      loop: "{{ archivos_montvia }}"
+      loop_control:
+        label: "{{ item }}"
 
     - name: Registrar fin de transferencia
       ansible.builtin.set_fact:
