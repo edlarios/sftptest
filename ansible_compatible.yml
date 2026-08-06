@@ -1,0 +1,99 @@
+---
+- name: Transferir archivos Montvia sin Python remoto
+  hosts: all
+  gather_facts: false
+
+  vars:
+    directorio_destino: "/home/test"
+    directorio_staging: "/tmp/montvia-staging"
+    archivos_montvia:
+      - montvia1.txt
+      - montvia2.txt
+      - montvia3.txt
+      - montvia4.txt
+      - montvia5.txt
+
+    # Estas variables deben coincidir con la conexión SSH de Semaphore.
+    sftp_host: "{{ ansible_host | default(inventory_hostname) }}"
+    sftp_user: "{{ ansible_user | default('veb') }}"
+    sftp_port: "{{ ansible_port | default(22) }}"
+    # Define la ruta de la clave en Semaphore o deja vacío si usa ssh-agent.
+    sftp_identity_file: ""
+
+  tasks:
+    - name: Validar directorio destino sin usar Python remoto
+      ansible.builtin.raw: "test -d {{ directorio_destino | quote }}"
+      changed_when: false
+
+    - name: Validar archivos fuente en el controlador Semaphore
+      ansible.builtin.stat:
+        path: "{{ playbook_dir }}/files/{{ item }}"
+      delegate_to: localhost
+      loop: "{{ archivos_montvia }}"
+      loop_control:
+        label: "{{ item }}"
+      register: archivos_origen_stat
+
+    - name: Detener si falta algún archivo fuente
+      ansible.builtin.fail:
+        msg: "No existe el archivo fuente: {{ playbook_dir }}/files/{{ item.item }}"
+      when: not item.stat.exists or not item.stat.isreg
+      loop: "{{ archivos_origen_stat.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Crear staging y eliminar archivos anteriores sin Python remoto
+      ansible.builtin.raw: >-
+        mkdir -p {{ directorio_staging | quote }} &&
+        rm -f --
+        {% for archivo in archivos_montvia %}
+        {{ (directorio_destino + '/' + archivo) | quote }}
+        {% endfor %}
+
+    - name: Registrar inicio de transferencia SFTP
+      ansible.builtin.shell: "date +%s"
+      delegate_to: localhost
+      changed_when: false
+      register: transferencia_inicio
+
+    - name: Transferir archivos al staging mediante SFTP desde Semaphore
+      ansible.builtin.shell:
+        cmd: >-
+          printf '%s\n'
+          "put {{ (playbook_dir + '/files/' + item) | quote }} {{ (directorio_staging + '/' + item) | quote }}"
+          | sftp -oBatchMode=yes -oStrictHostKeyChecking=accept-new
+          -P {{ sftp_port }}
+          {% if sftp_identity_file | length > 0 %}-i {{ sftp_identity_file | quote }}{% endif %}
+          {{ sftp_user | quote }}@{{ sftp_host | quote }}
+      delegate_to: localhost
+      loop: "{{ archivos_montvia }}"
+      loop_control:
+        label: "{{ item }}"
+
+    - name: Registrar fin de transferencia SFTP
+      ansible.builtin.shell: "date +%s"
+      delegate_to: localhost
+      changed_when: false
+      register: transferencia_fin
+
+    - name: Copiar archivos desde staging al destino CIFS sin Python remoto
+      ansible.builtin.raw: >-
+        cat {{ (directorio_staging + '/' + item) | quote }}
+        > {{ (directorio_destino + '/' + item) | quote }}
+        && rm -f {{ (directorio_staging + '/' + item) | quote }}
+      loop: "{{ archivos_montvia }}"
+      loop_control:
+        label: "{{ item }}"
+
+    - name: Mostrar métricas de transferencia
+      ansible.builtin.debug:
+        msg:
+          - "Archivos transferidos: {{ archivos_montvia | join(', ') }}"
+          - "Datos transferidos: {{ archivos_origen_stat.results | map(attribute='stat.size') | map('int') | sum }} bytes"
+          - "Tiempo SFTP: {{ ((transferencia_fin.stdout | int) - (transferencia_inicio.stdout | int)) }} segundos"
+          - "Tiempo SFTP: {{ ((((transferencia_fin.stdout | int) - (transferencia_inicio.stdout | int)) / 60) | round(2)) }} minutos"
+          - >-
+            Ancho de banda promedio: {{ (((archivos_origen_stat.results | map(attribute='stat.size') | map('int') | sum) * 8) / ((transferencia_fin.stdout | int) - (transferencia_inicio.stdout | int)) / 1000) | round(2) }} kbit/s
+          - >-
+            Velocidad promedio: {{ (((archivos_origen_stat.results | map(attribute='stat.size') | map('int') | sum) / 1024) / ((transferencia_fin.stdout | int) - (transferencia_inicio.stdout | int))) | round(2) }} KiB/s
+
