@@ -1,5 +1,5 @@
 ---
-- name: Transferir archivos a freeFTPd mediante SFTP v14
+- name: Transferir archivos a freeFTPd mediante SFTP v15
   hosts: all
   gather_facts: false
 
@@ -12,13 +12,15 @@
       - montvia5.txt
 
     # Ruta virtual dentro del Home Directory configurado en freeFTPd.
-    # No es una ruta Linux del servidor Windows.
     sftp_remote_dir: ""
     sftp_host: ""
     sftp_user: ""
     sftp_port: 22
     sftp_password: ""
-    sftp_kex_algorithms: "+diffie-hellman-group14-sha1,diffie-hellman-group1-sha1"
+
+    # Compatibilidad con el servidor SSH/SFTP antiguo.
+    sftp_kex_algorithms: "+diffie-hellman-group14-sha1"
+    sftp_host_key_algorithms: "+ssh-rsa"
     sftp_debug: false
 
   tasks:
@@ -72,6 +74,7 @@
           -oKbdInteractiveAuthentication=yes
           -oPreferredAuthentications=password,keyboard-interactive
           -oKexAlgorithms={{ sftp_kex_algorithms }}
+          -oHostKeyAlgorithms={{ sftp_host_key_algorithms }}
           -oStrictHostKeyChecking=accept-new
           -P {{ sftp_port }}
           {{ sftp_user | quote }}@{{ sftp_host | quote }}
@@ -112,4 +115,3 @@
             Ancho de banda promedio: {{ ((((archivos_origen_stat.results | map(attribute='stat.size') | map('int') | sum) * 8) / transferencia_sftp_segundos) / 1000) | round(2) }} kbit/s
           - >-
             Velocidad promedio: {{ (((archivos_origen_stat.results | map(attribute='stat.size') | map('int') | sum) / 1024) / transferencia_sftp_segundos) | round(2) }} KiB/s
-
