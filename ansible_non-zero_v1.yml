@@ -1,6 +1,6 @@
 ---
 # ansible_non-zero_v1.yml
-# Transferencia SFTP con métricas de tiempo, velocidad y ancho de banda.
+# Transferencia SFTP con métricas en minutos, MB y Mbps.
 # Define sftp_password como variable secreta en Semaphore.
 
 - name: Transferencia SFTP de archivos Montvia
@@ -52,11 +52,6 @@
           - "Cantidad de archivos: {{ sftp_files | length }}"
       delegate_to: localhost
 
-    - name: Registrar inicio de la transferencia
-      ansible.builtin.set_fact:
-        transferencia_sftp_inicio: "{{ lookup('pipe', 'date +%s.%N') | float }}"
-      delegate_to: localhost
-
   tasks:
     - name: Confirmar que existan los archivos locales
       ansible.builtin.stat:
@@ -79,6 +74,11 @@
         path: /tmp/montvia-staging
         state: directory
         mode: "0700"
+      delegate_to: localhost
+
+    - name: Registrar inicio de la transferencia SFTP
+      ansible.builtin.set_fact:
+        transferencia_sftp_inicio: "{{ lookup('pipe', 'date +%s.%N') | float }}"
       delegate_to: localhost
 
     - name: Subir archivos al servidor SFTP
@@ -108,7 +108,7 @@
       no_log: true
 
   post_tasks:
-    - name: Registrar fin de la transferencia
+    - name: Registrar fin de la transferencia SFTP
       ansible.builtin.set_fact:
         transferencia_sftp_fin: "{{ lookup('pipe', 'date +%s.%N') | float }}"
         transferencia_sftp_segundos: >-
@@ -123,15 +123,16 @@
         msg:
           - "Archivos transferidos: {{ sftp_files | length }}"
           - >-
-            Tamaño total: {{ ((archivos_origen_stat.results |
-            map(attribute='stat.size') | map('int') | sum) / 1024) | round(2) }} KiB
-          - "Tiempo total de transferencia: {{ transferencia_sftp_segundos | round(2) }} segundos"
+            Tamaño total: {{ (((archivos_origen_stat.results |
+            map(attribute='stat.size') | map('int') | sum) / 1000000) | round(2)) }} MB
+          - >-
+            Tiempo total de transferencia: {{ ((transferencia_sftp_segundos / 60) | round(2)) }} minutos
           - >-
             Ancho de banda promedio: {{ ((((archivos_origen_stat.results |
             map(attribute='stat.size') | map('int') | sum) * 8) /
-            transferencia_sftp_segundos) / 1000) | round(2) }} kbit/s
+            transferencia_sftp_segundos) / 1000000) | round(2) }} Mbps
           - >-
-            Velocidad promedio: {{ (((archivos_origen_stat.results |
-            map(attribute='stat.size') | map('int') | sum) / 1024) /
-            transferencia_sftp_segundos) | round(2) }} KiB/s
+            Velocidad promedio: {{ ((((archivos_origen_stat.results |
+            map(attribute='stat.size') | map('int') | sum) /
+            transferencia_sftp_segundos) / 1000000) | round(2)) }} MB/s
       delegate_to: localhost
