@@ -1,0 +1,108 @@
+---
+# ansible_non-zero_v1.yml
+# Sube archivos al servidor SFTP usando sshpass por medio de SSHPASS.
+# La contraseña debe definirse en Semaphore como sftp_password.
+
+- name: Transferencia SFTP de archivos Montvia
+  hosts: all
+  gather_facts: false
+  become: false
+
+  vars:
+    sftp_host_effective: "{{ hostvars[inventory_hostname].sftp_host | default(inventory_hostname) }}"
+    sftp_user_effective: "{{ hostvars[inventory_hostname].sftp_user | default('I+D') }}"
+    sftp_port_effective: "{{ hostvars[inventory_hostname].sftp_port | default(22) }}"
+    sftp_remote_dir: "/tmp/montvia-staging"
+    sftp_local_dir: "{{ playbook_dir }}/files"
+    sftp_files:
+      - montvia1.txt
+      - montvia2.txt
+      - montvia3.txt
+      - montvia4.txt
+
+  pre_tasks:
+    - name: Validar variables SFTP
+      ansible.builtin.assert:
+        that:
+          - sftp_password is defined
+          - (sftp_password | string | length) > 0
+          - sftp_host_effective | length > 0
+          - sftp_user_effective | length > 0
+        fail_msg: >-
+          Faltan variables SFTP. Define sftp_password en el Environment de
+          Semaphore y verifica sftp_host y sftp_user en el inventario.
+      delegate_to: localhost
+      no_log: true
+
+    - name: Verificar que sshpass esté instalado
+      ansible.builtin.command: command -v sshpass
+      register: sshpass_check
+      changed_when: false
+      delegate_to: localhost
+
+    - name: Mostrar configuración no sensible
+      ansible.builtin.debug:
+        msg:
+          - "Host SFTP: {{ sftp_host_effective }}"
+          - "Usuario SFTP: {{ sftp_user_effective }}"
+          - "Puerto SFTP: {{ sftp_port_effective }}"
+          - "Directorio remoto: {{ sftp_remote_dir }}"
+          - "Contraseña definida: {{ (sftp_password | string | length) > 0 }}"
+          - "Cantidad de archivos: {{ sftp_files | length }}"
+      delegate_to: localhost
+
+  tasks:
+    - name: Confirmar que existan los archivos locales
+      ansible.builtin.stat:
+        path: "{{ sftp_local_dir }}/{{ item }}"
+      loop: "{{ sftp_files }}"
+      register: local_files
+      delegate_to: localhost
+
+    - name: Detener si falta algún archivo local
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.isreg
+        fail_msg: "No existe el archivo local: {{ item.item }}"
+      loop: "{{ local_files.results }}"
+      delegate_to: localhost
+
+    - name: Crear directorio temporal local de staging
+      ansible.builtin.file:
+        path: /tmp/montvia-staging
+        state: directory
+        mode: "0700"
+      delegate_to: localhost
+
+    - name: Subir archivos al servidor SFTP
+      ansible.builtin.shell: |
+        printf 'put %s %s\n' \
+          {{ (sftp_local_dir ~ '/' ~ item) | quote }} \
+          {{ (sftp_remote_dir ~ '/' ~ item) | quote }} |
+        sshpass -e sftp \
+          -oBatchMode=no \
+          -oPubkeyAuthentication=no \
+          -oKbdInteractiveAuthentication=yes \
+          -oPreferredAuthentications=password,keyboard-interactive \
+          -oStrictHostKeyChecking=accept-new \
+          -P {{ sftp_port_effective | quote }} \
+          {{ (sftp_user_effective ~ '@' ~ sftp_host_effective) | quote }}
+      args:
+        executable: /bin/bash
+      environment:
+        SSHPASS: "{{ sftp_password }}"
+      register: sftp_upload
+      changed_when: sftp_upload.rc == 0
+      failed_when: sftp_upload.rc != 0
+      delegate_to: localhost
+      loop: "{{ sftp_files }}"
+      loop_control:
+        label: "{{ item }}"
+      no_log: true
+
+  post_tasks:
+    - name: Informar resultado de la transferencia
+      ansible.builtin.debug:
+        msg: "Transferencia SFTP completada para {{ sftp_files | length }} archivos."
+      delegate_to: localhost
