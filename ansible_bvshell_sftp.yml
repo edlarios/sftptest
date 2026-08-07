@@ -1,0 +1,135 @@
+---
+# ansible_bvshell_sftp.yml
+# Playbook exclusivo para BvShell/Bitvise SFTP-only.
+# No intenta abrir una shell ni ejecutar tareas Ansible en el servidor remoto.
+# El directorio destino debe existir previamente y tener permisos de escritura.
+
+- name: Subir archivos directamente a BvShell mediante SFTP
+  hosts: all
+  connection: local
+  gather_facts: false
+  become: false
+
+  vars:
+    bvshell_host_effective: "{{ hostvars[inventory_hostname].bvshell_host | default(inventory_hostname) }}"
+    bvshell_user_effective: "{{ hostvars[inventory_hostname].bvshell_user | default('I+D') }}"
+    bvshell_port_effective: "{{ hostvars[inventory_hostname].bvshell_port | default(22) }}"
+    directorio_destino: "/inbox"
+    sftp_local_dir: "{{ playbook_dir }}/files"
+    sftp_files:
+      - montvia1.txt
+      - montvia2.txt
+      - montvia3.txt
+      - montvia4.txt
+
+  pre_tasks:
+    - name: Validar variables de BvShell
+      ansible.builtin.assert:
+        that:
+          - sftp_password is defined
+          - (sftp_password | string | length) > 0
+          - bvshell_host_effective | length > 0
+          - bvshell_user_effective | length > 0
+          - directorio_destino | length > 0
+        fail_msg: >-
+          Faltan variables. Define sftp_password en Semaphore y verifica
+          bvshell_host, bvshell_user y directorio_destino.
+      delegate_to: localhost
+      no_log: true
+
+    - name: Verificar que sshpass esté instalado en el runner
+      ansible.builtin.command:
+        cmd: sshpass -V
+      register: sshpass_check
+      changed_when: false
+      delegate_to: localhost
+
+    - name: Mostrar configuración no sensible
+      ansible.builtin.debug:
+        msg:
+          - "Servidor BvShell: {{ bvshell_host_effective }}"
+          - "Usuario SFTP: {{ bvshell_user_effective }}"
+          - "Puerto SFTP: {{ bvshell_port_effective }}"
+          - "Directorio destino: {{ directorio_destino }}"
+          - "Contraseña definida: {{ (sftp_password | string | length) > 0 }}"
+          - "Cantidad de archivos: {{ sftp_files | length }}"
+      delegate_to: localhost
+
+  tasks:
+    - name: Verificar archivos locales
+      ansible.builtin.stat:
+        path: "{{ sftp_local_dir }}/{{ item }}"
+      loop: "{{ sftp_files }}"
+      register: archivos_origen_stat
+      delegate_to: localhost
+
+    - name: Detener si falta algún archivo local
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.isreg
+        fail_msg: "No existe el archivo local: {{ item.item }}"
+      loop: "{{ archivos_origen_stat.results }}"
+      delegate_to: localhost
+
+    - name: Registrar inicio de transferencia
+      ansible.builtin.set_fact:
+        transferencia_sftp_inicio: "{{ lookup('pipe', 'date +%s.%N') | float }}"
+      delegate_to: localhost
+
+    - name: Subir archivos directamente a BvShell
+      ansible.builtin.shell: |
+        printf 'put %s %s\n' \
+          {{ (sftp_local_dir ~ '/' ~ item) | quote }} \
+          {{ (directorio_destino ~ '/' ~ item) | quote }} |
+        sshpass -e sftp \
+          -oBatchMode=no \
+          -oPubkeyAuthentication=no \
+          -oKbdInteractiveAuthentication=yes \
+          -oPreferredAuthentications=password,keyboard-interactive \
+          -oStrictHostKeyChecking=accept-new \
+          -P {{ bvshell_port_effective | quote }} \
+          {{ (bvshell_user_effective ~ '@' ~ bvshell_host_effective) | quote }}
+      args:
+        executable: /bin/bash
+      environment:
+        SSHPASS: "{{ sftp_password }}"
+      register: bvshell_upload
+      changed_when: bvshell_upload.rc == 0
+      failed_when: bvshell_upload.rc != 0
+      delegate_to: localhost
+      loop: "{{ sftp_files }}"
+      loop_control:
+        label: "{{ item }}"
+      no_log: true
+
+  post_tasks:
+    - name: Registrar fin de transferencia
+      ansible.builtin.set_fact:
+        transferencia_sftp_segundos: >-
+          {{ [
+            ((lookup('pipe', 'date +%s.%N') | float) - (transferencia_sftp_inicio | float)),
+            0.001
+          ] | max }}
+      delegate_to: localhost
+
+    - name: Mostrar métricas de BvShell
+      ansible.builtin.debug:
+        msg:
+          - "Archivos transferidos: {{ sftp_files | length }}"
+          - >-
+            Tamaño total: {{ (((archivos_origen_stat.results |
+            map(attribute='stat.size') | map('int') | sum) / 1000000) | round(2)) }} MB
+          - >-
+            Tiempo total: {{ ((transferencia_sftp_segundos / 60) | round(2)) }} minutos
+          - >-
+            Ancho de banda promedio: {{ ((((archivos_origen_stat.results |
+            map(attribute='stat.size') | map('int') | sum) * 8) /
+            transferencia_sftp_segundos) / 1000000) | round(2) }} Mbps
+          - >-
+            Velocidad promedio: {{ ((((archivos_origen_stat.results |
+            map(attribute='stat.size') | map('int') | sum) /
+            transferencia_sftp_segundos) / 1000000) | round(2)) }} MB/s
+          - "Directorio destino: {{ directorio_destino }}"
+      delegate_to: localhost
+
