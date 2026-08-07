@@ -1,9 +1,9 @@
 ---
-# ansible_non-zero_v1.yml
-# Crea el directorio remoto y transfiere archivos por SFTP.
-# Define sftp_password como variable secreta en Semaphore.
+# ansible_non-zero_v2.yml
+# Crea el directorio SFTP, sube los archivos y luego los mueve.
+# Define sftp_password y directorio_destino en Semaphore o en el inventario.
 
-- name: Transferencia SFTP de archivos Montvia
+- name: Transferencia y movimiento SFTP de archivos Montvia
   hosts: all
   gather_facts: false
   become: false
@@ -13,6 +13,7 @@
     sftp_user_effective: "{{ hostvars[inventory_hostname].sftp_user | default('I+D') }}"
     sftp_port_effective: "{{ hostvars[inventory_hostname].sftp_port | default(22) }}"
     sftp_remote_dir: "/tmp/montvia-staging"
+    directorio_destino: "/tmp/montvia-destino"
     sftp_local_dir: "{{ playbook_dir }}/files"
     sftp_files:
       - montvia1.txt
@@ -28,9 +29,10 @@
           - (sftp_password | string | length) > 0
           - sftp_host_effective | length > 0
           - sftp_user_effective | length > 0
+          - directorio_destino | length > 0
         fail_msg: >-
-          Faltan variables SFTP. Define sftp_password en el Environment de
-          Semaphore y verifica sftp_host y sftp_user en el inventario.
+          Faltan variables. Define sftp_password y directorio_destino en
+          Semaphore o verifica las variables del inventario.
       delegate_to: localhost
       no_log: true
 
@@ -47,7 +49,8 @@
           - "Host SFTP: {{ sftp_host_effective }}"
           - "Usuario SFTP: {{ sftp_user_effective }}"
           - "Puerto SFTP: {{ sftp_port_effective }}"
-          - "Directorio remoto: {{ sftp_remote_dir }}"
+          - "Directorio de staging: {{ sftp_remote_dir }}"
+          - "Directorio destino: {{ directorio_destino }}"
           - "Contraseña definida: {{ (sftp_password | string | length) > 0 }}"
           - "Cantidad de archivos: {{ sftp_files | length }}"
       delegate_to: localhost
@@ -74,7 +77,7 @@
         transferencia_sftp_inicio: "{{ lookup('pipe', 'date +%s.%N') | float }}"
       delegate_to: localhost
 
-    - name: Crear directorio remoto en el servidor SFTP
+    - name: Crear directorio de staging en el servidor SFTP
       ansible.builtin.shell: |
         printf '%s\n' "-mkdir {{ sftp_remote_dir }}" |
         sshpass -e sftp \
@@ -89,13 +92,34 @@
         executable: /bin/bash
       environment:
         SSHPASS: "{{ sftp_password }}"
-      register: sftp_mkdir
-      changed_when: sftp_mkdir.rc == 0
-      failed_when: sftp_mkdir.rc != 0
+      register: sftp_mkdir_staging
+      changed_when: sftp_mkdir_staging.rc == 0
+      failed_when: sftp_mkdir_staging.rc != 0
       delegate_to: localhost
       no_log: true
 
-    - name: Subir archivos al servidor SFTP
+    - name: Crear directorio destino en el servidor SFTP
+      ansible.builtin.shell: |
+        printf '%s\n' "-mkdir {{ directorio_destino }}" |
+        sshpass -e sftp \
+          -oBatchMode=no \
+          -oPubkeyAuthentication=no \
+          -oKbdInteractiveAuthentication=yes \
+          -oPreferredAuthentications=password,keyboard-interactive \
+          -oStrictHostKeyChecking=accept-new \
+          -P {{ sftp_port_effective | quote }} \
+          {{ (sftp_user_effective ~ '@' ~ sftp_host_effective) | quote }}
+      args:
+        executable: /bin/bash
+      environment:
+        SSHPASS: "{{ sftp_password }}"
+      register: sftp_mkdir_destino
+      changed_when: sftp_mkdir_destino.rc == 0
+      failed_when: sftp_mkdir_destino.rc != 0
+      delegate_to: localhost
+      no_log: true
+
+    - name: Subir archivos al directorio de staging
       ansible.builtin.shell: |
         printf 'put %s %s\n' \
           {{ (sftp_local_dir ~ '/' ~ item) | quote }} \
@@ -121,7 +145,6 @@
         label: "{{ item }}"
       no_log: true
 
-  post_tasks:
     - name: Registrar fin de la transferencia SFTP
       ansible.builtin.set_fact:
         transferencia_sftp_fin: "{{ lookup('pipe', 'date +%s.%N') | float }}"
@@ -132,10 +155,37 @@
           ] | max }}
       delegate_to: localhost
 
+    - name: Mover archivos al directorio destino remoto
+      ansible.builtin.shell: |
+        printf 'rename %s %s\n' \
+          {{ (sftp_remote_dir ~ '/' ~ item) | quote }} \
+          {{ (directorio_destino ~ '/' ~ item) | quote }} |
+        sshpass -e sftp \
+          -oBatchMode=no \
+          -oPubkeyAuthentication=no \
+          -oKbdInteractiveAuthentication=yes \
+          -oPreferredAuthentications=password,keyboard-interactive \
+          -oStrictHostKeyChecking=accept-new \
+          -P {{ sftp_port_effective | quote }} \
+          {{ (sftp_user_effective ~ '@' ~ sftp_host_effective) | quote }}
+      args:
+        executable: /bin/bash
+      environment:
+        SSHPASS: "{{ sftp_password }}"
+      register: sftp_move
+      changed_when: sftp_move.rc == 0
+      failed_when: sftp_move.rc != 0
+      delegate_to: localhost
+      loop: "{{ sftp_files }}"
+      loop_control:
+        label: "{{ item }}"
+      no_log: true
+
+  post_tasks:
     - name: Mostrar métricas de la transferencia
       ansible.builtin.debug:
         msg:
-          - "Archivos transferidos: {{ sftp_files | length }}"
+          - "Archivos transferidos y movidos: {{ sftp_files | length }}"
           - >-
             Tamaño total: {{ (((archivos_origen_stat.results |
             map(attribute='stat.size') | map('int') | sum) / 1000000) | round(2)) }} MB
@@ -149,4 +199,5 @@
             Velocidad promedio: {{ ((((archivos_origen_stat.results |
             map(attribute='stat.size') | map('int') | sum) /
             transferencia_sftp_segundos) / 1000000) | round(2)) }} MB/s
+          - "Directorio destino: {{ directorio_destino }}"
       delegate_to: localhost
