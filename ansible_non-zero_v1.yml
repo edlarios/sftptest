@@ -1,6 +1,6 @@
 ---
 # ansible_non-zero_v1.yml
-# Transferencia SFTP mediante sshpass.
+# Transferencia SFTP con métricas de tiempo, velocidad y ancho de banda.
 # Define sftp_password como variable secreta en Semaphore.
 
 - name: Transferencia SFTP de archivos Montvia
@@ -52,12 +52,17 @@
           - "Cantidad de archivos: {{ sftp_files | length }}"
       delegate_to: localhost
 
+    - name: Registrar inicio de la transferencia
+      ansible.builtin.set_fact:
+        transferencia_sftp_inicio: "{{ lookup('pipe', 'date +%s.%N') | float }}"
+      delegate_to: localhost
+
   tasks:
     - name: Confirmar que existan los archivos locales
       ansible.builtin.stat:
         path: "{{ sftp_local_dir }}/{{ item }}"
       loop: "{{ sftp_files }}"
-      register: local_files
+      register: archivos_origen_stat
       delegate_to: localhost
 
     - name: Detener si falta algún archivo local
@@ -66,7 +71,7 @@
           - item.stat.exists
           - item.stat.isreg
         fail_msg: "No existe el archivo local: {{ item.item }}"
-      loop: "{{ local_files.results }}"
+      loop: "{{ archivos_origen_stat.results }}"
       delegate_to: localhost
 
     - name: Crear directorio temporal local de staging
@@ -103,7 +108,30 @@
       no_log: true
 
   post_tasks:
-    - name: Informar resultado de la transferencia
+    - name: Registrar fin de la transferencia
+      ansible.builtin.set_fact:
+        transferencia_sftp_fin: "{{ lookup('pipe', 'date +%s.%N') | float }}"
+        transferencia_sftp_segundos: >-
+          {{ [
+            ((lookup('pipe', 'date +%s.%N') | float) - (transferencia_sftp_inicio | float)),
+            0.001
+          ] | max }}
+      delegate_to: localhost
+
+    - name: Mostrar métricas de la transferencia
       ansible.builtin.debug:
-        msg: "Transferencia SFTP completada para {{ sftp_files | length }} archivos."
+        msg:
+          - "Archivos transferidos: {{ sftp_files | length }}"
+          - >-
+            Tamaño total: {{ ((archivos_origen_stat.results |
+            map(attribute='stat.size') | map('int') | sum) / 1024) | round(2) }} KiB
+          - "Tiempo total de transferencia: {{ transferencia_sftp_segundos | round(2) }} segundos"
+          - >-
+            Ancho de banda promedio: {{ ((((archivos_origen_stat.results |
+            map(attribute='stat.size') | map('int') | sum) * 8) /
+            transferencia_sftp_segundos) / 1000) | round(2) }} kbit/s
+          - >-
+            Velocidad promedio: {{ (((archivos_origen_stat.results |
+            map(attribute='stat.size') | map('int') | sum) / 1024) /
+            transferencia_sftp_segundos) | round(2) }} KiB/s
       delegate_to: localhost
