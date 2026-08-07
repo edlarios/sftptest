@@ -1,7 +1,7 @@
 ---
 # ansible_non-zero_v1.yml
-# Sube archivos al servidor SFTP usando sshpass por medio de SSHPASS.
-# La contraseña debe definirse en Semaphore como sftp_password.
+# Transferencia SFTP mediante sshpass.
+# Define sftp_password como variable secreta en Semaphore.
 
 - name: Transferencia SFTP de archivos Montvia
   hosts: all
@@ -35,7 +35,8 @@
       no_log: true
 
     - name: Verificar que sshpass esté instalado
-      ansible.builtin.command: command -v sshpass
+      ansible.builtin.command:
+        cmd: sshpass -V
       register: sshpass_check
       changed_when: false
       delegate_to: localhost
