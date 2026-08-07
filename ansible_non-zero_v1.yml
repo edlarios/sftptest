@@ -1,6 +1,6 @@
 ---
 # ansible_non-zero_v1.yml
-# Transferencia SFTP con métricas en minutos, MB y Mbps.
+# Crea el directorio remoto y transfiere archivos por SFTP.
 # Define sftp_password como variable secreta en Semaphore.
 
 - name: Transferencia SFTP de archivos Montvia
@@ -69,17 +69,31 @@
       loop: "{{ archivos_origen_stat.results }}"
       delegate_to: localhost
 
-    - name: Crear directorio temporal local de staging
-      ansible.builtin.file:
-        path: /tmp/montvia-staging
-        state: directory
-        mode: "0700"
-      delegate_to: localhost
-
     - name: Registrar inicio de la transferencia SFTP
       ansible.builtin.set_fact:
         transferencia_sftp_inicio: "{{ lookup('pipe', 'date +%s.%N') | float }}"
       delegate_to: localhost
+
+    - name: Crear directorio remoto en el servidor SFTP
+      ansible.builtin.shell: |
+        printf '%s\n' "-mkdir {{ sftp_remote_dir }}" |
+        sshpass -e sftp \
+          -oBatchMode=no \
+          -oPubkeyAuthentication=no \
+          -oKbdInteractiveAuthentication=yes \
+          -oPreferredAuthentications=password,keyboard-interactive \
+          -oStrictHostKeyChecking=accept-new \
+          -P {{ sftp_port_effective | quote }} \
+          {{ (sftp_user_effective ~ '@' ~ sftp_host_effective) | quote }}
+      args:
+        executable: /bin/bash
+      environment:
+        SSHPASS: "{{ sftp_password }}"
+      register: sftp_mkdir
+      changed_when: sftp_mkdir.rc == 0
+      failed_when: sftp_mkdir.rc != 0
+      delegate_to: localhost
+      no_log: true
 
     - name: Subir archivos al servidor SFTP
       ansible.builtin.shell: |
