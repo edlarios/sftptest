@@ -125,7 +125,7 @@
     - name: Mostrar métricas de transferencia
       ansible.builtin.debug:
         msg:
-          - "Fecha (México Central): {{ now(fmt='%Y-%m-%d %H:%M:%S', tz='America/Mexico_City') }}" 
+          - "Fecha (México Central): {{ lookup('pipe', 'TZ=America/Mexico_City date +\"%Y-%m-%d %H:%M:%S\"') }}"
           - "Archivos transferidos: {{ archivos_montvia | join(', ') }}"
           - "Datos transferidos: {{ archivos_origen_stat.results | map(attribute='stat.size') | map('int') | sum }} bytes"
           - "Peso total: {{ ((archivos_origen_stat.results | map(attribute='stat.size') | map('int') | sum) / 1000000) | round(2) }} MB"
